@@ -163,6 +163,13 @@ struct ExplainResult: Equatable {
     /// Parse the model's reply. We ask it to optionally end with a line
     /// `ACTION: clean|purge|installer|none`; everything before that is the
     /// explanation. Tolerant of a missing/unknown action (→ no suggestion).
+    ///
+    /// That last line is a control token, not copy: it is matched against
+    /// `ExplainSuggestion`'s raw values and then dropped, so nobody ever reads
+    /// it. Translating it would fall through `rawValue:` as unknown and cost
+    /// the user the action button without any visible error — which is why
+    /// every localized prompt tells the model to answer in its language but
+    /// keep this one line in English.
     static func parse(_ raw: String) -> ExplainResult {
         var explanationLines: [String] = []
         var suggestion: ExplainSuggestion?
@@ -184,14 +191,20 @@ struct ExplainResult: Equatable {
 // MARK: - Prompt
 
 enum ExplainPrompt {
-    /// The Chinese variant of the running UI language, if any
-    /// ("zh-Hans" / "zh-Hant", explicit override or system).
-    static func chineseVariant() -> String? {
+    /// Which language the model should write in. The reply lands in the Status
+    /// pane surrounded by localized chrome, so it tracks the UI language — the
+    /// explicit override when there is one, the system's pick otherwise — and
+    /// not the system locale or the language of the data it describes. A
+    /// paragraph of English wedged between Russian labels reads as a broken
+    /// translation rather than a deliberate choice. `nil` is the English UI,
+    /// where the base prompt already answers in English unprompted.
+    static func replyLanguage() -> String? {
         switch Store.appLanguage {
-        case "zh-Hans", "zh-Hant": return Store.appLanguage
-        case "en":                 return nil
+        case "zh-Hans", "zh-Hant", "ru": return Store.appLanguage
+        case "en":                       return nil
         default:
             let lang = Bundle.main.preferredLocalizations.first ?? Locale.current.identifier
+            if lang.hasPrefix("ru") { return "ru" }
             guard lang.hasPrefix("zh") else { return nil }
             let traditional = lang.contains("Hant") || lang.contains("TW") || lang.contains("HK") || lang.contains("MO")
             return traditional ? "zh-Hant" : "zh-Hans"
@@ -200,11 +213,13 @@ enum ExplainPrompt {
 
     static func make(_ ctx: ExplainContext) -> (system: String, user: String) {
         let language: String
-        switch chineseVariant() {
+        switch replyLanguage() {
         case "zh-Hans":
             language = "\n\nWrite the explanation in Simplified Chinese (简体中文). Keep the final ACTION line exactly as specified, in English."
         case "zh-Hant":
             language = "\n\nWrite the explanation in Traditional Chinese as used in Taiwan (繁體中文，台灣用語). Keep the final ACTION line exactly as specified, in English."
+        case "ru":
+            language = "\n\nWrite the explanation in Russian (русский). Keep the final ACTION line exactly as specified, in English."
         default:
             language = ""
         }
